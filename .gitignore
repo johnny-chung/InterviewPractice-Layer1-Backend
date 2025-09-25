@@ -1,2 +1,14 @@
 *.code-workspace
 .vscode/
+
+layer1_backend_and_ai_design.md
+
+/test_data
+node_modules/
+.env
+uploads/
+dist/
+coverage/
+__pycache__/
+python_service/.venv/
+python_service/.pytest_cache/

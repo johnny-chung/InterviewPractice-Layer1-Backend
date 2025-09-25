@@ -1,0 +1,29 @@
+version: '3.9'
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "${AZURE_SQL_PASSWORD}"
+    ports:
+      - "1433:1433"
+    volumes:
+      - mssqldata:/var/opt/mssql
+
+  redis:
+    image: redis
+    ports:
+      - "6379:6379"
+
+  python_service:
+    build:
+      context: ../python-worker
+    env_file:
+      - ../python-worker/.env
+    environment:
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+    ports:
+      - "8000:8000"
+
+volumes:
+  mssqldata:
