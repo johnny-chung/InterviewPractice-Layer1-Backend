@@ -1,29 +1,59 @@
-version: '3.9'
+version: "3.9"
 services:
-  sqlserver:
-    image: mcr.microsoft.com/mssql/server:2022-latest
+  backend:
+    build:
+      context: .
+    env_file:
+      - ./.env
     environment:
-      ACCEPT_EULA: "Y"
-      MSSQL_SA_PASSWORD: "${AZURE_SQL_PASSWORD}"
+      PYTHON_SERVICE_URL: http://python_worker:8000
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      - redis
+      - python_worker
     ports:
-      - "1433:1433"
+      - "4000:4000"
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    depends_on:
+      - backend
+    environment:
+      # Optional: set your email for Let's Encrypt rate-limit friendliness.
+      ACME_AGREE: "true"
     volumes:
-      - mssqldata:/var/opt/mssql
-
-  redis:
-    image: redis
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
     ports:
-      - "6379:6379"
+      - "80:80"
+      - "443:443"
+    restart: unless-stopped
 
-  python_service:
+  python_worker:
     build:
       context: ../python-worker
     env_file:
       - ../python-worker/.env
     environment:
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
-    ports:
-      - "8000:8000"
+    expose:
+      - "8000"
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    expose:
+      - "6379"
+    restart: unless-stopped
+
+networks:
+  default:
+    name: layer1_internal
+    driver: bridge
 
 volumes:
-  mssqldata:
+  caddy_data:
+  caddy_config:

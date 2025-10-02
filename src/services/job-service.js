@@ -1,6 +1,7 @@
 // Job service: holds SQL helpers for job descriptions and derived requirements.
 const { v4: uuidv4 } = require("uuid");
 const { query } = require("../db");
+const { bus } = require("../events/bus");
 
 // NOTE: All functions in this module interact directly with the following tables:
 //   job_descriptions (primary job posting metadata + parsed_summary JSON + status lifecycle)
@@ -78,6 +79,18 @@ async function updateJobStatus(jobId, status, parsedSummary) {
     "UPDATE job_descriptions SET status = $1, parsed_summary = $2, updated_at = SYSUTCDATETIME() WHERE id = $3",
     [status, parsedSummary ? JSON.stringify(parsedSummary) : null, jobId]
   );
+  // Emit after DB write so consumers rely on committed state.
+  try {
+    // Debug: trace lifecycle transition emission (can be filtered in logger).
+    // NOTE: If you find this too chatty later, gate behind env flag VERBOSE_REALTIME_LOGS.
+    // eslint-disable-next-line no-console
+    console.debug(
+      `[realtime][bus] Emitting job.status.changed for jobId=${jobId} status=${status}`
+    );
+    bus.emit("job.status.changed", { jobId, status, ts: Date.now() });
+  } catch (e) {
+    // Swallow to avoid breaking worker path.
+  }
 }
 
 /**
@@ -92,7 +105,7 @@ async function getJobForUser(jobId, userId) {
   const jobRes = await query(
     `SELECT id, user_id, title, source, filename, mime_type, raw_text, status, parsed_summary, created_at, updated_at
        FROM job_descriptions
-      WHERE id = $1 AND user_id = $2`,
+      WHERE id = $1 AND user_id = $2 AND is_deleted = 0`,
     [jobId, userId]
   );
   if (jobRes.rows.length === 0) return null;
@@ -111,7 +124,24 @@ async function getJobForUser(jobId, userId) {
     [jobId]
   );
 
-  return { ...jobRow, requirements: requirementsRes.rows };
+  // DB: Load soft skills (display-only, not used in matching) ordered by value desc.
+  let softSkills = [];
+  try {
+    const softRes = await query(
+      `IF OBJECT_ID('job_soft_skills', 'U') IS NOT NULL
+       SELECT id, skill, value AS importance, created_at FROM job_soft_skills WHERE job_id = $1 ORDER BY value DESC, created_at DESC`,
+      [jobId]
+    );
+    softSkills = softRes.rows || [];
+  } catch (e) {
+    // ignore if table absent (backwards compatibility during rollout)
+  }
+
+  return {
+    ...jobRow,
+    requirements: requirementsRes.rows,
+    soft_skills: softSkills,
+  };
 }
 
 /**
@@ -125,11 +155,34 @@ async function listJobs(userId) {
   const result = await query(
     `SELECT id, title, source, status, created_at, updated_at
        FROM job_descriptions
-      WHERE user_id = $1
+      WHERE user_id = $1 AND is_deleted = 0
       ORDER BY created_at DESC`,
     [userId]
   );
   return result.rows;
+}
+
+/**
+ * softDeleteJob
+ * Marks a job as deleted (soft delete) setting is_deleted=1 and deleted_at timestamp.
+ * Ownership enforcement should happen at controller layer prior to calling.
+ * @param {string} jobId
+ * @param {string} userId
+ */
+async function softDeleteJob(jobId, userId) {
+  await query(
+    `UPDATE job_descriptions
+        SET is_deleted = 1, deleted_at = SYSUTCDATETIME(), updated_at = SYSUTCDATETIME()
+      WHERE id = $1 AND user_id = $2 AND is_deleted = 0`,
+    [jobId, userId]
+  );
+  try {
+    bus.emit("job.status.changed", {
+      jobId,
+      status: "deleted",
+      ts: Date.now(),
+    });
+  } catch (_) {}
 }
 
 /**
@@ -157,6 +210,29 @@ async function replaceJobRequirements(jobId, requirements) {
   }
 }
 
+/**
+ * replaceJobSoftSkills
+ * Replaces all soft skills (display only) for a job. Safe no-op if table missing.
+ * @param {string} jobId
+ * @param {Array<{skill:string, value:number}>} softSkills
+ */
+async function replaceJobSoftSkills(jobId, softSkills) {
+  if (!Array.isArray(softSkills)) return;
+  try {
+    await query("DELETE FROM job_soft_skills WHERE job_id = $1", [jobId]);
+    for (const s of softSkills) {
+      if (!s.skill) continue;
+      await query(
+        `INSERT INTO job_soft_skills (id, job_id, skill, value, created_at)
+         VALUES ($1,$2,$3,$4,SYSUTCDATETIME())`,
+        [uuidv4(), jobId, s.skill, s.value !== undefined ? s.value : null]
+      );
+    }
+  } catch (e) {
+    // Table might not exist yet; swallow to avoid breaking core flow.
+  }
+}
+
 module.exports = {
   createJobRecord,
   updateJobStoragePath,
@@ -164,4 +240,6 @@ module.exports = {
   getJobForUser,
   listJobs,
   replaceJobRequirements,
+  replaceJobSoftSkills,
+  softDeleteJob,
 };

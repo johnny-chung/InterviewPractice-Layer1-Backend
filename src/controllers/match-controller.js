@@ -11,7 +11,11 @@
  * Success: 202 { id: <matchJobId>, status: <initialStatus> }
  * Side effects: createMatchJob DB insert, enqueue computeMatch job.
  */
-const { ensureUser, getUserId } = require("../services/user-service");
+const {
+  ensureUser,
+  getUserId,
+  incrementAnnualUsage,
+} = require("../services/user-service");
 const { getResumeForUser } = require("../services/resume-service");
 const { getJobForUser } = require("../services/job-service");
 const {
@@ -32,6 +36,27 @@ async function requestMatch(req, res, next) {
     }
 
     const user = await ensureUser(auth.sub, auth.email); // ensureUser => upsert/select from users table; guarantees local PK for ownership checks.
+
+    // Basic pro check placeholder: if request includes header x-pro-member=1 treat as pro (until Stripe webhook integration populates DB or token claim).
+    const isPro = req.headers["x-pro-member"] === "1"; // Future: derive from persisted subscription state.
+
+    // Enforce annual usage for non-pro users BEFORE creating match job.
+    if (!isPro) {
+      // Ensure user object has usage fields (ensureUser returns them). Block if already at or over limit.
+      if (
+        typeof user.annual_usage_count === "number" &&
+        typeof user.annual_limit === "number" &&
+        user.annual_usage_count >= user.annual_limit
+      ) {
+        return res.status(402).json({
+          error: "upgrade_required",
+          message:
+            "Annual free match limit reached. Upgrade to Pro for unlimited matches.",
+        });
+      }
+      // Under limit -> increment usage atomically.
+      await incrementAnnualUsage(user.id);
+    }
     const resume = await getResumeForUser(resumeId, user.id); // getResumeForUser => SELECT resumes row (joined skills) WHERE id & user_id match.
     if (!resume) return res.status(404).json({ error: "resume_not_found" });
     if (resume.status !== "ready") {

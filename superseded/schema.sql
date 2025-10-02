@@ -1,0 +1,2 @@
+-- Legacy schema copy (see active version in ../db/schema.sql)
+-- Retained only for reference; not executed by current docker-compose setup.

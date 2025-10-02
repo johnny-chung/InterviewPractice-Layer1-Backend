@@ -11,6 +11,7 @@ const {
 const {
   updateJobStatus,
   replaceJobRequirements,
+  replaceJobSoftSkills,
 } = require("./services/job-service");
 const {
   updateMatchJobStatus,
@@ -163,7 +164,8 @@ async function processParseResume(job) {
  * @returns {Promise<void>}
  */
 async function processParseJob(job) {
-  const { jobId, source, storagePath, filename, mimeType, rawText } = job.data;
+  const { jobId, source, storagePath, filename, mimeType, rawText, title } =
+    job.data;
   log("Processing job description", jobId);
   await updateJobStatus(jobId, "processing"); // Keeps UI aware parsing is underway.
   let payload;
@@ -173,9 +175,10 @@ async function processParseJob(job) {
       filename,
       mime_type: mimeType,
       content_b64: fileBytes.toString("base64"),
+      title: title || null,
     };
   } else {
-    payload = { text: rawText || "" }; // Text submissions skip file IO.
+    payload = { text: rawText || "", title: title || null }; // Text submissions skip file IO.
   }
 
   try {
@@ -184,14 +187,85 @@ async function processParseJob(job) {
       payload
     );
     const data = resp.data || {};
-    const requirements = data.requirements || [];
+    let requirements = data.requirements || [];
+    const softSkills = data.soft_skills || [];
+
+    log(
+      `processParseJob: received requirements total=${
+        requirements.length
+      } explicit=${requirements.filter((r) => !r.inferred).length} inferred=${
+        requirements.filter((r) => r.inferred).length
+      } softSkills=${softSkills.length}`
+    );
+
+    // Business rule: drop low-importance inferred requirements below configurable threshold.
+    // Env variable JOB_INFERRED_MIN_IMPORTANCE can be specified as 0-1 or 0-100. Default 0.7.
+    const rawThreshold =
+      process.env.JOB_INFERRED_MIN_IMPORTANCE ||
+      process.env.JOB_INFERRED_THRESHOLD;
+    let inferredThreshold = 0.7;
+    if (rawThreshold) {
+      const num = parseFloat(rawThreshold);
+      if (!isNaN(num) && num > 0) {
+        inferredThreshold = num > 1 ? num / 100 : num; // interpret >1 as percentage 0-100
+        inferredThreshold = Math.min(Math.max(inferredThreshold, 0), 1);
+      }
+    }
+    if (Array.isArray(requirements) && requirements.length) {
+      requirements = requirements.filter((r) => {
+        if (!r) return false;
+        const importance =
+          r.importance !== undefined && r.importance !== null
+            ? Number(r.importance)
+            : r.weight !== undefined
+            ? Number(r.weight)
+            : null;
+        if (r.inferred) {
+          if (importance === null) return false; // drop unscored inferred
+          return importance >= inferredThreshold;
+        }
+        return true; // always keep explicit
+      });
+    }
+    log(
+      `processParseJob: after filter requirements total=${
+        requirements.length
+      } explicit=${requirements.filter((r) => !r.inferred).length} inferred=${
+        requirements.filter((r) => r.inferred).length
+      } threshold=${inferredThreshold}`
+    );
+    // Recompute highlights after filtering so UI only receives surviving top requirements.
     const summary = {
-      highlights: data.highlights || null,
+      highlights: (data.highlights || []).filter((h) =>
+        requirements.some((r) => r.skill === (h.skill || h.name || h))
+      ),
       overview: data.summary || (data.details && data.details.summary) || null,
       onet: data.onet || null,
+      soft_skills_count: Array.isArray(softSkills) ? softSkills.length : 0,
     };
     await replaceJobRequirements(jobId, requirements); // Overwrite previous requirements for deterministic results.
+    if (softSkills.length) {
+      await replaceJobSoftSkills(
+        jobId,
+        softSkills.map((s) => ({
+          skill: s.skill || s.name,
+          value: s.value !== undefined ? s.value : s.importance || null,
+        }))
+      );
+      log(`processParseJob: persisted softSkills=${softSkills.length}`);
+    } else {
+      // Clear existing if none returned (idempotent reparse) - rely on service function delete call.
+      await replaceJobSoftSkills(jobId, []);
+      log("processParseJob: no softSkills returned; cleared existing");
+    }
     await updateJobStatus(jobId, "ready", summary);
+    log(
+      `processParseJob: job ${jobId} marked ready with summary explicit=${
+        requirements.filter((r) => !r.inferred).length
+      } inferred=${requirements.filter((r) => r.inferred).length} soft=${
+        softSkills.length
+      }`
+    );
   } catch (err) {
     error("Failed to parse job", err);
     await updateJobStatus(jobId, "error", { message: err.message }); // Allows front-end to display validation guidance.

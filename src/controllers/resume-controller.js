@@ -8,11 +8,12 @@ const {
   // updateResumeStoragePath, // no longer needed for R2 direct write
   getResumeForUser,
   listResumes,
+  softDeleteResume,
 } = require("../services/resume-service");
 const { queues } = require("../queues");
 const { getAuthContext } = require("../utils/request-context");
 const { log, error: logError } = require("../utils/logger");
-const { putObject } = require("../utils/object-storage");
+const { putObject } = require("../utils/r2-storage");
 
 // Mirror python worker capabilities; adjust when new parsers are added.
 /**
@@ -167,4 +168,24 @@ module.exports = {
   uploadResume,
   listResumeSummaries,
   getResumeDetail,
+  deleteResume,
 };
+
+/**
+ * Soft delete a resume (sets is_deleted flag) ensuring ownership.
+ * Returns 204 on success, 404 if not found, 401 if unauthorized.
+ */
+async function deleteResume(req, res, next) {
+  try {
+    const auth = getAuthContext(req);
+    if (!auth) return res.status(401).json({ error: "unauthorized" });
+    const userId = await getUserId(auth.sub);
+    if (!userId) return res.status(404).json({ error: "not_found" });
+    const resume = await getResumeForUser(req.params.id, userId);
+    if (!resume) return res.status(404).json({ error: "not_found" });
+    await softDeleteResume(req.params.id, userId);
+    return res.status(204).send();
+  } catch (err) {
+    next(err);
+  }
+}

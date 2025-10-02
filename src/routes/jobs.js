@@ -15,6 +15,7 @@ const {
   createJob,
   listJobSummaries,
   getJobDetail,
+  deleteJob,
 } = require("../controllers/job-controller");
 
 const router = express.Router();
@@ -43,5 +44,7 @@ router.post("/", (req, res, next) => {
     createJob(req, res, next);
   }
 });
+
+router.delete("/:id", deleteJob);
 
 module.exports = router;

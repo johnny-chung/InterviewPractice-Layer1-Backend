@@ -8,6 +8,7 @@ const {
   // updateJobStoragePath, // no longer needed
   getJobForUser,
   listJobs,
+  softDeleteJob,
 } = require("../services/job-service");
 const { queues } = require("../queues");
 const { getAuthContext } = require("../utils/request-context");
@@ -50,6 +51,9 @@ async function createJob(req, res, next) {
 
     const file = req.file; // Provided by multer when multipart form-data is used.
     const { title, description_text: descriptionText, text } = req.body || {};
+    if (!title || !title.trim()) {
+      return res.status(400).json({ error: "title_required" });
+    }
     const narrativeText = descriptionText || text;
 
     if (!file && !narrativeText) {
@@ -107,6 +111,7 @@ async function createJob(req, res, next) {
       storagePath: key,
       rawText: file ? null : narrativeText,
       userId: user.id,
+      title: title || null,
     });
 
     res.status(202).json({ id: jobId, status: "queued" });
@@ -152,6 +157,9 @@ async function getJobDetail(req, res, next) {
       source: job.source,
       parsedData: job.parsed_summary || {},
       requirements: job.requirements || [],
+      // Surface soft skills (display-only, not used in matching). Field name kept snake_case to stay
+      // consistent with other backend response shapes expected by the frontend types (soft_skills?).
+      soft_skills: job.soft_skills || [],
       createdAt: job.created_at,
       updatedAt: job.updated_at,
     });
@@ -164,4 +172,25 @@ module.exports = {
   createJob,
   listJobSummaries,
   getJobDetail,
+  deleteJob,
 };
+
+/**
+ * Soft delete a job description (sets is_deleted flag) ensuring ownership.
+ * Returns 204 on success, 404 if not found or not owned, 401 if unauthorized.
+ */
+async function deleteJob(req, res, next) {
+  try {
+    const auth = getAuthContext(req);
+    if (!auth) return res.status(401).json({ error: "unauthorized" });
+    const userId = await getUserId(auth.sub);
+    if (!userId) return res.status(404).json({ error: "not_found" });
+    // Verify exists & ownership and not already deleted
+    const job = await getJobForUser(req.params.id, userId);
+    if (!job) return res.status(404).json({ error: "not_found" });
+    await softDeleteJob(req.params.id, userId);
+    return res.status(204).send();
+  } catch (err) {
+    next(err);
+  }
+}

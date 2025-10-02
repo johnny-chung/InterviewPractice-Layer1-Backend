@@ -16,9 +16,10 @@ jest.mock("../src/services/resume-service", () => ({
   getResumeForUser: jest.fn(),
   listResumes: jest.fn(),
   replaceResumeSkills: jest.fn(),
+  softDeleteResume: jest.fn(),
 }));
 
-jest.mock("../src/utils/object-storage", () => ({
+jest.mock("../src/utils/r2-storage", () => ({
   putObject: jest.fn().mockResolvedValue(),
   getObjectBytes: jest.fn(),
 }));
@@ -60,7 +61,7 @@ describe("Resume routes", () => {
     expect(typeof res.body.id).toBe("string");
     expect(res.body).toHaveProperty("status", "queued");
     // expect putObject called (R2 upload)
-    const { putObject } = require("../src/utils/object-storage");
+    const { putObject } = require("../src/utils/r2-storage");
     expect(putObject).toHaveBeenCalled();
     expect(queues.parseResume.add).toHaveBeenCalledWith(
       "parseResume",

@@ -12,6 +12,7 @@ const {
   uploadResume,
   listResumeSummaries,
   getResumeDetail,
+  deleteResume,
 } = require("../controllers/resume-controller");
 // const { getTempDir } = require('../utils/storage'); // no longer needed with R2
 
@@ -24,5 +25,6 @@ const upload = multer({
 router.get("/", listResumeSummaries);
 router.get("/:id", getResumeDetail);
 router.post("/", upload.single("file"), uploadResume); // Accepts multipart uploads only.
+router.delete("/:id", deleteResume);
 
 module.exports = router;

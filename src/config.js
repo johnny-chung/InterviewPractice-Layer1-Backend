@@ -8,7 +8,7 @@
  *  - db {object}: Azure SQL connection settings; 'encrypt' & 'trustServerCertificate' control TLS behavior.
  *  - redisUrl {string}: Connection string consumed by BullMQ / ioredis.
  *  - pythonServiceUrl {string}: Base URL for the Python parsing + match microservice.
- *  - r2 {object}: Cloudflare R2 (S3-compatible) credentials & bucket info used by object-storage util.
+ *  - r2 {object}: Cloudflare R2 (S3-compatible) credentials & bucket info used by r2-storage util.
  */
 const dotenv = require("dotenv");
 
@@ -17,6 +17,9 @@ dotenv.config();
 const config = {
   port: parseInt(process.env.PORT || "4000", 10),
   authDisabled: (process.env.AUTH_DISABLED || "false").toLowerCase() === "true",
+  // When true, adds extra console logging around Socket.IO connections and event bridge emissions.
+  verboseRealtimeLogs:
+    (process.env.VERBOSE_REALTIME_LOGS || "false").toLowerCase() === "true",
   auth0: {
     domain: process.env.AUTH0_DOMAIN,
     audience: process.env.AUTH0_AUDIENCE,

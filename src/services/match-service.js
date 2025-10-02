@@ -5,6 +5,7 @@
 // NOTE: Functions are intentionally granular so workers/controllers stay concise.
 const { v4: uuidv4 } = require("uuid");
 const { query } = require("../db");
+const { bus } = require("../events/bus");
 
 /**
  * createMatchJob
@@ -26,6 +27,13 @@ async function createMatchJob({ userId, resumeId, jobId }) {
     "SELECT id, status, created_at FROM match_jobs WHERE id = $1",
     [matchJobId]
   );
+  try {
+    bus.emit("match.status.changed", {
+      id: matchJobId,
+      status: "queued",
+      ts: Date.now(),
+    });
+  } catch (_) {}
   return created.rows[0];
 }
 
@@ -45,6 +53,14 @@ async function updateMatchJobStatus(matchJobId, status, errorMessage) {
       WHERE id = $3`,
     [status, errorMessage || null, matchJobId]
   );
+  try {
+    bus.emit("match.status.changed", {
+      id: matchJobId,
+      status,
+      ts: Date.now(),
+      error: errorMessage || null,
+    });
+  } catch (_) {}
 }
 
 /**
@@ -62,6 +78,14 @@ async function attachResult(matchJobId, matchId) {
       WHERE id = $2`,
     [matchId, matchJobId]
   );
+  try {
+    bus.emit("match.status.changed", {
+      id: matchJobId,
+      status: "completed",
+      ts: Date.now(),
+      resultId: matchId,
+    });
+  } catch (_) {}
 }
 
 /**

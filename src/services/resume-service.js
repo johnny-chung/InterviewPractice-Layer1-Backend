@@ -5,6 +5,7 @@
 // NOTE: This module is intentionally thin; controllers & workers call these helpers to keep DB logic centralized.
 const { v4: uuidv4 } = require("uuid");
 const { query } = require("../db");
+const { bus } = require("../events/bus");
 
 /**
  * createResume
@@ -20,6 +21,13 @@ async function createResume({ id, userId, filename, mimeType, storagePath }) {
      VALUES ($1,$2,$3,$4,$5,'queued',SYSUTCDATETIME(),SYSUTCDATETIME())`,
     [resumeId, userId || null, filename, mimeType || null, storagePath]
   );
+  try {
+    bus.emit("resume.status.changed", {
+      id: resumeId,
+      status: "queued",
+      ts: Date.now(),
+    });
+  } catch (_) {}
   return { id: resumeId, status: "queued" };
 }
 
@@ -43,6 +51,9 @@ async function updateResumeStatus(resumeId, status, parsedSummary) {
     "UPDATE resumes SET status = $1, parsed_summary = $2, updated_at = SYSUTCDATETIME() WHERE id = $3",
     [status, parsedSummary ? JSON.stringify(parsedSummary) : null, resumeId]
   );
+  try {
+    bus.emit("resume.status.changed", { id: resumeId, status, ts: Date.now() });
+  } catch (_) {}
 }
 
 /**
@@ -53,7 +64,7 @@ async function getResumeForUser(resumeId, userId) {
   const resumeRes = await query(
     `SELECT id, user_id, filename, mime_type, status, parsed_summary, created_at, updated_at
        FROM resumes
-      WHERE id = $1 AND user_id = $2`,
+      WHERE id = $1 AND user_id = $2 AND is_deleted = 0`,
     [resumeId, userId]
   );
   if (resumeRes.rows.length === 0) return null;
@@ -82,11 +93,33 @@ async function listResumes(userId) {
   const result = await query(
     `SELECT id, filename, mime_type, status, created_at, updated_at
        FROM resumes
-      WHERE user_id = $1
+      WHERE user_id = $1 AND is_deleted = 0
       ORDER BY created_at DESC`,
     [userId]
   );
   return result.rows;
+}
+
+/**
+ * softDeleteResume
+ * Marks resume row as deleted setting is_deleted=1 and deleted_at timestamp.
+ * @param {string} resumeId
+ * @param {string} userId
+ */
+async function softDeleteResume(resumeId, userId) {
+  await query(
+    `UPDATE resumes
+        SET is_deleted = 1, deleted_at = SYSUTCDATETIME(), updated_at = SYSUTCDATETIME()
+      WHERE id = $1 AND user_id = $2 AND is_deleted = 0`,
+    [resumeId, userId]
+  );
+  try {
+    bus.emit("resume.status.changed", {
+      id: resumeId,
+      status: "deleted",
+      ts: Date.now(),
+    });
+  } catch (_) {}
 }
 
 /**
@@ -119,4 +152,5 @@ module.exports = {
   getResumeForUser,
   listResumes,
   replaceResumeSkills,
+  softDeleteResume,
 };
