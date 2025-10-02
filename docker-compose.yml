@@ -22,6 +22,7 @@ services:
     environment:
       # Optional: set your email for Let's Encrypt rate-limit friendliness.
       ACME_AGREE: "true"
+      APP_DOMAIN: localhost
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

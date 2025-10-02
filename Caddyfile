@@ -5,7 +5,8 @@
 
 {$APP_DOMAIN} {
   encode zstd gzip
-  @api path /socket.io/* /api/* *
+  # Match API and websocket paths (remove trailing * catch-all to avoid unintended matches)
+  @api path /socket.io/* /api/*
   reverse_proxy backend:4000
 
   # Basic security headers
@@ -20,9 +21,4 @@
     output stdout
     format console
   }
-}
-
-# Fallback if APP_DOMAIN not set: serve on any host header (useful in first boot). Comment out in prod.
-:80 {
-  respond "APP_DOMAIN not configured: set APP_DOMAIN env for Caddy" 200
 }
